@@ -17,7 +17,6 @@ Enables hardware video decode in VA-API-only applications (Firefox, Chromium, mp
 | HEVC | Yes |
 | VP8 | Yes |
 | VP9 | Yes |
-| AV1 | Yes |
 
 ## Installation
 

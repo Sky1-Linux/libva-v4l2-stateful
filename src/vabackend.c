@@ -186,14 +186,6 @@ static V4L2Buffer *get_buffer(V4L2Driver *drv, VABufferID id)
     return NULL;
 }
 
-/* Track per-frame buffers so we can free them after submission */
-static void track_frame_buffer(V4L2Context *context, VABufferID id)
-{
-    if (context->num_frame_buffers >= MAX_FRAME_BUFFERS)
-        return;
-    context->frame_buffers[context->num_frame_buffers++] = id;
-}
-
 /* Forward declarations for cleanup helpers */
 static VAStatus v4l2_DestroySurfaces(VADriverContextP ctx, VASurfaceID *surface_list, int num_surfaces);
 static VAStatus v4l2_DestroyContext(VADriverContextP ctx, VAContextID context_id);
@@ -1071,8 +1063,6 @@ static VAStatus v4l2_DeriveImage(
         return VA_STATUS_ERROR_SURFACE_BUSY;
     }
 
-    V4L2Context *context = surface->context;
-
     /* Create a buffer to hold the image info */
     VAGenericID buf_id = allocate_buffer_id(drv);
     if (buf_id == VA_INVALID_ID)
@@ -1214,11 +1204,23 @@ static VAStatus v4l2_GetImage(
             surface->capture_idx, planes[0].length, planes[1].length);
     }
 
-    /* Use image buffer dimensions for copy */
-    size_t img_width = image_buf->width ? image_buf->width : surface->width;
-    size_t img_height = image_buf->height ? image_buf->height : surface->height;
-    size_t y_size = img_width * img_height;
-    size_t uv_size = y_size / 2;
+    /*
+     * Use the actual V4L2 buffer plane sizes, not calculated surface sizes.
+     * V4L2 may align height (e.g., 720 -> 704) so buffer may be smaller
+     * than expected. Copying surface dimensions would read past buffer end.
+     */
+    size_t y_size = cap_buf->plane0_len;
+    size_t uv_size = cap_buf->plane1_len;
+
+    /* Sanity check: ensure we don't overflow image buffer */
+    size_t expected_size = surface->width * surface->height * 3 / 2;
+    if (y_size + uv_size > expected_size) {
+        /* Buffer larger than expected, clamp to surface dimensions */
+        y_size = surface->width * surface->height;
+        uv_size = y_size / 2;
+    }
+
+    LOG("GetImage: Copying Y=%zu, UV=%zu bytes from capture buffer", y_size, uv_size);
 
     /* Copy Y plane */
     memcpy(image_buf->data, y_plane, y_size);

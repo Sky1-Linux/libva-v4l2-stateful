@@ -1,0 +1,8 @@
+libva-v4l2-stateful (0.1.0-1) unstable; urgency=medium
+
+  * Initial release for Sky1 Linux
+  * VA-API driver wrapping V4L2 stateful decoders
+  * Supported codecs: H.264, HEVC, VP8, VP9
+  * Working vaapi-copy mode for CPU readback
+
+ -- Entrpi <entrpi@proton.me>  Fri, 13 Dec 2025 01:00:00 +0800
