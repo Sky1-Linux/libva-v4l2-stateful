@@ -103,6 +103,9 @@ typedef struct V4L2Codec {
     VAProfile       *profiles;
     int             num_profiles;
 
+    /* Called when picture parameter buffer is submitted */
+    void (*handle_picture_params)(struct V4L2Context *ctx, V4L2Buffer *buf);
+
     /* Called when slice data buffer is submitted */
     void (*handle_slice_data)(struct V4L2Context *ctx, V4L2Buffer *buf);
 
@@ -140,6 +143,15 @@ typedef struct V4L2Context {
     /* Slice data accumulation */
     void                *last_slice_params;
     unsigned int        last_slice_count;
+
+    /* H.264 codec-specific state */
+    struct {
+        bool            sps_pps_sent;
+        uint8_t         last_sps[128];
+        size_t          last_sps_size;
+        uint8_t         last_pps[64];
+        size_t          last_pps_size;
+    } h264;
 
     /* Track buffers used in current frame for cleanup */
     VABufferID          frame_buffers[MAX_FRAME_BUFFERS];

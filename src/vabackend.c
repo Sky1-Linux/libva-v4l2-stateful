@@ -832,8 +832,13 @@ static VAStatus v4l2_RenderPicture(
             context->last_slice_count = buf->num_elements;
             break;
         case VAPictureParameterBufferType:
+            /* Call codec-specific handler if available */
+            if (context->codec && context->codec->handle_picture_params) {
+                context->codec->handle_picture_params(context, buf);
+            }
+            break;
         case VAIQMatrixBufferType:
-            /* For stateful V4L2, we don't need these - hardware parses them */
+            /* For stateful V4L2, hardware handles IQ matrix internally */
             break;
         default:
             LOG("Unhandled buffer type: %d", buf->type);
