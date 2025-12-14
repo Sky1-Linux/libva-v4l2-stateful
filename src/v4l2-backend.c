@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <poll.h>
 #include <linux/videodev2.h>
 
 /* CIX Sky1 VPU fourcc values */
@@ -476,12 +477,33 @@ int v4l2_queue_bitstream(V4L2Context *ctx, void *data, size_t size)
 }
 
 /*
- * Dequeue decoded frame
+ * Dequeue decoded frame with poll() for proper waiting
  */
 int v4l2_dequeue_frame(V4L2Context *ctx, V4L2Surface *surface)
 {
     struct v4l2_buffer buf;
     struct v4l2_plane planes[2];
+
+    /* Use poll() to wait for a decoded frame (up to 500ms) */
+    struct pollfd pfd = {
+        .fd = ctx->v4l2_fd,
+        .events = POLLIN | POLLPRI,
+    };
+
+    int ret = poll(&pfd, 1, 500);
+    if (ret <= 0) {
+        if (ret == 0) {
+            LOG("poll() timeout - no frame ready");
+            return -1;
+        }
+        LOG("poll() error: %s", strerror(errno));
+        return -1;
+    }
+
+    if (!(pfd.revents & POLLIN)) {
+        LOG("poll() no POLLIN, revents=0x%x", pfd.revents);
+        return -1;
+    }
 
     memset(&buf, 0, sizeof(buf));
     memset(&planes, 0, sizeof(planes));
