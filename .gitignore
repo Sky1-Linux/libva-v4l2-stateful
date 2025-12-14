@@ -1,0 +1,28 @@
+# Build artifacts
+builddir/
+*.o
+*.so
+*.so.*
+
+# Debian build
+debian/.debhelper/
+debian/tmp/
+debian/files
+debian/*.substvars
+debian/*.debhelper.log
+debian/debhelper-build-stamp
+debian/libva-v4l2-stateful/
+*.deb
+*.buildinfo
+*.changes
+*.dsc
+
+# Meson
+_build/
+build/
+
+# Editor
+*~
+*.swp
+.vscode/
+.idea/
