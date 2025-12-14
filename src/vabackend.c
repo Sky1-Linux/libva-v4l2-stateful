@@ -135,12 +135,17 @@ static VAGenericID allocate_surface_id(V4L2Driver *drv)
 
 static VAGenericID allocate_buffer_id(V4L2Driver *drv)
 {
+    VAGenericID id = VA_INVALID_ID;
+
+    pthread_mutex_lock(&drv->mutex);
     for (int i = 0; i < MAX_BUFFERS; i++) {
         if (drv->buffers[i] == NULL) {
-            return i + 1 + 0x3000;
+            id = i + 1 + 0x3000;
+            break;
         }
     }
-    return VA_INVALID_ID;
+    pthread_mutex_unlock(&drv->mutex);
+    return id;
 }
 
 /* Object lookup */
@@ -181,6 +186,18 @@ static V4L2Buffer *get_buffer(V4L2Driver *drv, VABufferID id)
     return NULL;
 }
 
+/* Track per-frame buffers so we can free them after submission */
+static void track_frame_buffer(V4L2Context *context, VABufferID id)
+{
+    if (context->num_frame_buffers >= MAX_FRAME_BUFFERS)
+        return;
+    context->frame_buffers[context->num_frame_buffers++] = id;
+}
+
+/* Forward declarations for cleanup helpers */
+static VAStatus v4l2_DestroySurfaces(VADriverContextP ctx, VASurfaceID *surface_list, int num_surfaces);
+static VAStatus v4l2_DestroyContext(VADriverContextP ctx, VAContextID context_id);
+
 /*
  * VA-API Entry Points
  */
@@ -190,34 +207,28 @@ static VAStatus v4l2_Terminate(VADriverContextP ctx)
     V4L2Driver *drv = (V4L2Driver *)ctx->pDriverData;
     LOG("Terminating V4L2 VA-API driver");
 
+    /* Destroy surfaces first so any held CAPTURE buffers are returned while contexts exist */
+    for (int i = 0; i < MAX_SURFACES; i++) {
+        if (drv->surfaces[i]) {
+            VASurfaceID id = i + 1 + 0x2000;
+            v4l2_DestroySurfaces(ctx, &id, 1);
+        }
+    }
+
     /* Clean up contexts */
     for (int i = 0; i < MAX_PROFILES; i++) {
         if (drv->contexts[i]) {
-            V4L2Context *context = drv->contexts[i];
-            if (context->v4l2_fd >= 0) {
-                v4l2_close_device(drv, context->v4l2_fd);
-            }
-            bitstream_free(&context->bitstream);
-            pthread_mutex_destroy(&context->mutex);
-            free(context);
+            VAContextID id = i + 1 + 0x1000;
+            v4l2_DestroyContext(ctx, id);
         }
     }
 
-    /* Clean up surfaces */
-    for (int i = 0; i < MAX_SURFACES; i++) {
-        if (drv->surfaces[i]) {
-            V4L2Surface *surface = drv->surfaces[i];
-            pthread_mutex_destroy(&surface->mutex);
-            pthread_cond_destroy(&surface->cond);
-            free(surface);
-        }
-    }
-
-    /* Clean up buffers */
+    /* Clean up any remaining buffers */
     for (int i = 0; i < MAX_BUFFERS; i++) {
         if (drv->buffers[i]) {
             free(drv->buffers[i]->data);
             free(drv->buffers[i]);
+            drv->buffers[i] = NULL;
         }
     }
 
@@ -407,6 +418,8 @@ static VAStatus v4l2_CreateSurfaces(
         surface->capture_idx = -1;
         surface->dmabuf_fd = -1;
         surface->decoded = false;
+        surface->no_output = false;
+        surface->cached_image = VA_INVALID_ID;
         pthread_mutex_init(&surface->mutex, NULL);
         pthread_cond_init(&surface->cond, NULL);
 
@@ -443,6 +456,11 @@ static VAStatus v4l2_DestroySurfaces(
         int idx = SURFACE_INDEX(surface_list[i]);
         if (idx >= 0 && idx < MAX_SURFACES && drv->surfaces[idx]) {
             V4L2Surface *surface = drv->surfaces[idx];
+            /* Return any outstanding CAPTURE buffer to the queue */
+            if (surface->context && surface->capture_idx >= 0) {
+                v4l2_requeue_capture(surface->context, surface->capture_idx);
+            }
+            surface->cached_image = VA_INVALID_ID;
             if (surface->dmabuf_fd >= 0) {
                 close(surface->dmabuf_fd);
             }
@@ -530,10 +548,12 @@ static VAStatus v4l2_DestroyContext(
     if (context->streaming_output) {
         enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
         ioctl(context->v4l2_fd, VIDIOC_STREAMOFF, &type);
+        context->streaming_output = false;
     }
     if (context->streaming_capture) {
         enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
         ioctl(context->v4l2_fd, VIDIOC_STREAMOFF, &type);
+        context->streaming_capture = false;
     }
 
     /* Unmap OUTPUT buffers */
@@ -647,6 +667,8 @@ static VAStatus v4l2_MapBuffer(
 
         V4L2Context *context = surface->context;
         int capture_idx = surface->capture_idx;
+        buffer->capture_idx = capture_idx;
+        buffer->in_use = true;
 
         /* Query buffer info to get memory offset */
         struct v4l2_buffer buf;
@@ -693,11 +715,18 @@ static VAStatus v4l2_UnmapBuffer(
     if (buffer == NULL)
         return VA_STATUS_ERROR_INVALID_BUFFER;
 
-    /* Unmap DeriveImage buffers */
-    if (buffer->type == VAImageBufferType && buffer->data != NULL) {
+    /* Unmap DeriveImage buffers - these are mmap'd directly from V4L2 */
+    if (buffer->type == VAImageBufferType && buffer->surface_id != 0 &&
+        buffer->data != NULL) {
+        V4L2Surface *surface = get_surface(drv, buffer->surface_id);
+        if (surface && surface->context && buffer->capture_idx >= 0) {
+            v4l2_requeue_capture(surface->context, buffer->capture_idx);
+        }
         munmap(buffer->data, buffer->element_size);
         buffer->data = NULL;
-        LOG("UnmapBuffer: Unmapped image buffer %d", buf_id);
+        buffer->capture_idx = -1;
+        buffer->in_use = false;
+        LOG("UnmapBuffer: Unmapped DeriveImage buffer %d", buf_id);
     }
 
     return VA_STATUS_SUCCESS;
@@ -710,12 +739,23 @@ static VAStatus v4l2_DestroyBuffer(
     V4L2Driver *drv = (V4L2Driver *)ctx->pDriverData;
     int idx = BUFFER_INDEX(buf_id);
 
-    if (idx < 0 || idx >= MAX_BUFFERS || drv->buffers[idx] == NULL)
-        return VA_STATUS_ERROR_INVALID_BUFFER;
+    pthread_mutex_lock(&drv->mutex);
+    if (idx < 0 || idx >= MAX_BUFFERS || drv->buffers[idx] == NULL) {
+        pthread_mutex_unlock(&drv->mutex);
+        return VA_STATUS_SUCCESS;
+    }
+
+    /* If an image buffer is still marked in use, defer free */
+    if (drv->buffers[idx]->type == VAImageBufferType && drv->buffers[idx]->in_use) {
+        pthread_mutex_unlock(&drv->mutex);
+        LOG("DestroyBuffer: buffer %d still in use, deferring free", buf_id);
+        return VA_STATUS_SUCCESS;
+    }
 
     free(drv->buffers[idx]->data);
     free(drv->buffers[idx]);
     drv->buffers[idx] = NULL;
+    pthread_mutex_unlock(&drv->mutex);
 
     return VA_STATUS_SUCCESS;
 }
@@ -736,14 +776,22 @@ static VAStatus v4l2_BeginPicture(
 
     pthread_mutex_lock(&context->mutex);
 
+    /* If this surface held a previous capture buffer, return it so decoding can progress */
+    if (surface->context && surface->capture_idx >= 0) {
+        v4l2_requeue_capture(surface->context, surface->capture_idx);
+    }
+    surface->capture_idx = -1;
+
     /* Reset bitstream buffer for this picture */
     bitstream_reset(&context->bitstream);
     context->render_target = surface;
     context->last_slice_params = NULL;
     context->last_slice_count = 0;
+    context->num_frame_buffers = 0;
 
     surface->context = context;
     surface->decoded = false;
+    surface->no_output = false;
 
     pthread_mutex_unlock(&context->mutex);
 

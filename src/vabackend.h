@@ -35,7 +35,8 @@
 #include <linux/videodev2.h>
 
 #define MAX_SURFACES 32
-#define MAX_BUFFERS 64
+#define MAX_BUFFERS 1024
+#define MAX_FRAME_BUFFERS 1024
 #define MAX_PROFILES 16
 #define MAX_OUTPUT_BUFFERS 8
 #define MAX_CAPTURE_BUFFERS 16
@@ -62,6 +63,8 @@ typedef struct {
     VASurfaceID     surface_id;     /* For DeriveImage buffers */
     uint32_t        width;          /* For image buffers */
     uint32_t        height;         /* For image buffers */
+    int             capture_idx;    /* For image buffers mapped from CAPTURE */
+    bool            in_use;         /* For image buffers held by app */
 } V4L2Buffer;
 
 /* V4L2 memory-mapped buffer */
@@ -86,6 +89,8 @@ typedef struct V4L2Surface {
     int             capture_idx;    /* Index in CAPTURE queue, -1 if not assigned */
     int             dmabuf_fd;      /* DMABuf fd for zero-copy */
     bool            decoded;        /* Has valid decoded content */
+    bool            no_output;      /* Frame decoded but no CAPTURE output (show_frame=0) */
+    VAImageID       cached_image;   /* Cached image buffer for this surface */
     pthread_mutex_t mutex;
     pthread_cond_t  cond;
     struct V4L2Context *context;
@@ -135,6 +140,10 @@ typedef struct V4L2Context {
     /* Slice data accumulation */
     void                *last_slice_params;
     unsigned int        last_slice_count;
+
+    /* Track buffers used in current frame for cleanup */
+    VABufferID          frame_buffers[MAX_FRAME_BUFFERS];
+    int                 num_frame_buffers;
 
     pthread_mutex_t     mutex;
 } V4L2Context;
