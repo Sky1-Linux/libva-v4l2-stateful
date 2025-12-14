@@ -527,6 +527,39 @@ int v4l2_dequeue_frame(V4L2Context *ctx, V4L2Surface *surface)
 }
 
 /*
+ * Re-queue a CAPTURE buffer after it has been processed
+ */
+int v4l2_requeue_capture(V4L2Context *ctx, int capture_idx)
+{
+    if (capture_idx < 0 || capture_idx >= ctx->num_capture_buffers)
+        return -1;
+
+    if (ctx->v4l2_fd < 0 || !ctx->streaming_capture)
+        return 0;
+
+    if (ctx->capture_buffers[capture_idx].queued)
+        return 0;  /* Already queued */
+
+    struct v4l2_buffer buf;
+    struct v4l2_plane planes[2];
+    memset(&buf, 0, sizeof(buf));
+    memset(&planes, 0, sizeof(planes));
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    buf.memory = V4L2_MEMORY_MMAP;
+    buf.index = capture_idx;
+    buf.length = 2;
+    buf.m.planes = planes;
+
+    if (ioctl(ctx->v4l2_fd, VIDIOC_QBUF, &buf) < 0) {
+        LOG("Failed to re-queue CAPTURE buffer %d: %s", capture_idx, strerror(errno));
+        return -1;
+    }
+
+    ctx->capture_buffers[capture_idx].queued = true;
+    return 0;
+}
+
+/*
  * Export CAPTURE buffer as DMABuf
  */
 int v4l2_export_dmabuf(V4L2Context *ctx, int capture_idx)

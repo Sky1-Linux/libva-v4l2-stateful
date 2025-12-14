@@ -189,6 +189,7 @@ int v4l2_setup_output_queue(V4L2Context *ctx);
 int v4l2_setup_capture_queue(V4L2Context *ctx);
 int v4l2_queue_bitstream(V4L2Context *ctx, void *data, size_t size);
 int v4l2_dequeue_frame(V4L2Context *ctx, V4L2Surface *surface);
+int v4l2_requeue_capture(V4L2Context *ctx, int capture_idx);
 int v4l2_export_dmabuf(V4L2Context *ctx, int capture_idx);
 
 /* Codec registration */
