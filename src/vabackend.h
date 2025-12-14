@@ -153,6 +153,19 @@ typedef struct V4L2Context {
         size_t          last_pps_size;
     } h264;
 
+    /* HEVC codec-specific state */
+    struct {
+        bool            params_sent;        /* VPS/SPS/PPS sent to decoder */
+
+        /* Reconstructed parameter sets (from VA-API params) */
+        uint8_t         last_vps[64];
+        size_t          last_vps_size;
+        uint8_t         last_sps[256];
+        size_t          last_sps_size;
+        uint8_t         last_pps[128];
+        size_t          last_pps_size;
+    } hevc;
+
     /* Track buffers used in current frame for cleanup */
     VABufferID          frame_buffers[MAX_FRAME_BUFFERS];
     int                 num_frame_buffers;
