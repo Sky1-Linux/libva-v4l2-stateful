@@ -1,0 +1,28 @@
+Source: libva-v4l2-stateful
+Section: libs
+Priority: optional
+Maintainer: Entrpi <entrpi@proton.me>
+Build-Depends: debhelper-compat (= 13),
+               meson (>= 0.58.0),
+               pkg-config,
+               libva-dev (>= 1.8.0),
+               libdrm-dev (>= 2.4.60)
+Standards-Version: 4.6.2
+Homepage: https://github.com/sky1-linux/libva-v4l2-stateful
+
+Package: libva-v4l2-stateful
+Architecture: arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: VA-API driver for V4L2 stateful video decoders
+ This package provides a VA-API backend driver that wraps V4L2 stateful
+ (memory-to-memory) video decoders, enabling VA-API-only applications
+ to use hardware video decode on platforms with V4L2-only interfaces.
+ .
+ Supported codecs: H.264, HEVC, VP8, VP9, AV1
+ .
+ Target hardware: CIX Sky1 VPU (Linlon Video device)
+ .
+ Enables hardware decode in:
+  - Firefox (VA-API)
+  - Chromium (VA-API)
+  - mpv (--hwdec=vaapi-copy)
