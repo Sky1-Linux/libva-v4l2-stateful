@@ -1,3 +1,5 @@
+# THIS PROJECT IS DEPRECATED. We use V4L2-M2M natively instead now.
+
 # libva-v4l2-stateful
 
 VA-API driver for V4L2 stateful video decoders.
